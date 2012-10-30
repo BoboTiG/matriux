@@ -1,0 +1,26 @@
+﻿=== Legend ===
+	+ : added
+	- : deleted
+	^ : bug fixed
+	* : optimization
+	. : information
+
+
+[ july 06 2011 ]
+	. mid-0.1-b2 released
+	* code reviewed
+	^ do not copy Desktop/*
+	^ adding the $new_user group
+	^ /home/$new_user files were owned by the old group
+	^ hostname issue
+	^ /etc/resolv.conf issue
+	^ the good locale list is generated
+	^ "Untrusted application launcher"
+	^ icons disappearance
+	^ purge *.desktop files
+	+ timer and few details are writen to sdtout (could be helpful for debugging)
+	+ show version in title
+	
+[ may 29 2011 ]
+	. mid-0.1-b1 released
+	

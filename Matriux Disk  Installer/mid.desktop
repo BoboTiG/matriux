@@ -1,0 +1,11 @@
+
+[Desktop Entry]
+Encoding=UTF-8
+Version=0.1
+Name=Matriux Disk Installer
+Comment=Install Matriux
+Categories=System;
+Exec=/pt/matriux/MID/mid
+Icon=/pt/matriux/icons/48x48/icon.png
+Type=Application
+GenericName[fr_FR.UTF-8]=Install the Matriux system on your hard disk.

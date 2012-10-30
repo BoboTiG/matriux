@@ -1,0 +1,22 @@
+
+Launch MID into a console and see the output.
+When not error occures, you should have something like:
+
+-[--
+ ~ Matriux Disk Installer v0.1-b2 ~
+[00:00] Introduction
+[00:02] Step 1: Partition choice
+[00:03] Step 2: Install Grub?
+[00:05] Step 3: Personal account
+[00:16] Step 4: Root password
+[00:19] Step 5: Choose locale
+[00:25] Step 6: Confirmation
+[00:26] Step 7: Installation
+[03:38] Installation - Grub
+[03:45] End
+-]--
+
+3 min and 45 sec to install the system, quick is not it?
+
+Send critics, suggestions, tips or whatever you want to 
+tiger-222@matriux.com.

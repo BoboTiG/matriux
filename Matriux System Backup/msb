@@ -1,0 +1,158 @@
+#!/bin/sh
+#
+# ==================================================================== #
+#     MSB (Matriux System Backup) by Mickaël 'Tiger-222' Schoentgen    #
+# ==================================================================== #
+# Inspired by Remastersys for Debian.
+#
+# Last update: 2011.07.07
+#
+
+# ==[Variables]=========================================================
+VERSION="0.1-a1"
+path="/mnt/stock/projets/matriux/MSB_Matriux_System_Backup"
+icon="${path}/icon.png"
+title="Matriux System Backup"
+kernel=${kernel}
+total_steps=4
+start_time=$(date "+%s")
+
+
+# ==[Routines]==========================================================
+debug() {
+	current_time=$(date "+%s")
+	elapsed=$(echo "${current_time} - ${start_time}" | bc)
+	min=$(printf "%02d" $(echo "${elapsed} / 60" | bc))
+	sec=$(printf "%02d" $(echo "${elapsed} % 60" | bc))
+	echo "[${min}:${sec}]" $1
+}
+intro()  {
+	debug "Introduction"
+	. ${path}/msb.conf
+	[ -z "${WORKDIR}" ] && WORKDIR="/tmp/msb"
+	[ -z "${LIVEUSER}" ] && LIVEUSER="matriux"
+	[ -z "${LIVECDLABEL}" ] && LIVECDLABEL="Matriux"
+	[ -z "${CUSTOMISO}" ] && CUSTOMISO="matriux.iso"
+	#[ -d ${WORKDIR} ] && rm ${WORKDIR}
+	mkdir -p ${WORKDIR}
+	cd ${WORKDIR}
+}
+step_1() { # Create the CD/DVD tree in ${WORKDIR}/ISOTMP
+	debug "Step 1: Create the CD/DVD tree in ${WORKDIR}/ISOTMP"
+	mkdir -p ISOTMP/live ISOTMP/isolinux ISOTMP/install ISOTMP/preseed
+	mkdir -p dummysys/dev dummysys/etc/live dummysys/proc dummysys/tmp
+	mkdir -p dummysys/sys dummysys/mnt dummysys/media/cdrom dummysys/var
+	chmod 0777 dummysys/tmp
+	for addvar in ${EXCLUDES}; do
+		VAREXCLUDES="${VAREXCLUDES} --exclude='${addvar}' "
+	done
+
+	echo "1"
+	rsync ${VAREXCLUDES} --exclude="/var/log/*" --exclude="/var/mail/*" \
+		--exclude="*.pid" --exclude="*.[0-9].gz" --exclude="*.deb" \
+		-a /var/. dummysys/var/.
+	for folder in $(find /var/log/ -type d | cut -d"/" -f2-); do
+		mkdir -p dummysys/var/${folder}
+	done
+	echo "2"
+	rsync ${VAREXCLUDES} --exclude="*~" --exclude="*.bak" --exclude="*.old" -a /etc/. dummysys/etc/.
+
+	rm dummysys/etc/X11/xorg.conf*
+	rm dummysys/etc/timezone
+	rm dummysys/etc/mtab
+	rm dummysys/etc/fstab
+	rm dummysys/etc/udev/rules.d/70-persistent*
+	rm dummysys/etc/cups/ssl/server.crt
+	rm dummysys/etc/cups/ssl/server.key
+	rm dummysys/etc/ssh/ssh_host_rsa_key
+	rm dummysys/etc/ssh/ssh_host_dsa_key.pub
+	rm dummysys/etc/ssh/ssh_host_dsa_key
+	rm dummysys/etc/ssh/ssh_host_rsa_key.pub
+	ls dummysys/var/lib/apt/lists | grep -v ".gpg" | grep -v "lock" | grep -v "partial" | xargs -i rm dummysys/var/lib/apt/lists/{};
+
+	echo "3"
+	cp ${path}/isolinux/* ISOTMP/isolinux/
+	sed -i "s/__LIVECDLABEL__/${LIVECDLABEL}/" ISOTMP/isolinux/menu.cfg
+	echo "4"
+}
+step_2() { # Prepare boot
+	debug "Step 2: Prepare boot"
+	exit
+	# Step 2 - Prepare live.conf depending on whether this is a backup or dist
+	[ ! -d /etc/live ] && mkdir -p /etc/live
+	echo "export LIVE_USERNAME=\"${LIVEUSER}\"" > /etc/live/config.conf
+	echo "export LIVE_USER_FULLNAME=\"Live session user\"" >> /etc/live/config.conf
+	echo "export LIVE_HOSTNAME=\"${LIVEUSER}\"" >> /etc/live/config.conf
+
+
+	cp /etc/live/config.conf dummysys/etc/live/
+	
+	# make a new initial ramdisk including the live scripts
+	update-initramfs -t -c -k ${kernel}
+
+	echo "Copying your kernel and initrd for the livecd"
+	cp /boot/vmlinuz-${kernel} ISOTMP/live/vmlinuz
+	cp /boot/initrd.img-${kernel} ISOTMP/live/initrd.img
+}
+step_3() { # Make filesystem.squashfs
+	debug "Step 3: Make filesystem.squashfs"
+	[ -f ISOTMP/live/filesystem.squashfs ] && rm ISOTMP/live/filesystem.squashfs
+	SQUASHFSOPTSHIGH="-comp xz -Xbcj x86 -no-duplicates -no-recovery -always-use-fragments -b 1M"
+	mksquashfs dummysys/ ISOTMP/live/filesystem.squashfs ${SQUASHFSOPTSHIGH}
+	mksquashfs / ISOTMP/live/filesystem.squashfs -wildcards -e \
+		.thumbnails \
+		.cache \
+		.*history \
+		Cache \
+		boot/grub \
+		dev \
+		etc \
+		home \
+		media \
+		mnt \
+		proc \
+		sys \
+		tmp \
+		var \
+		pt \
+		opt \
+		lib64 \
+		lib32 \
+		usr/src \
+		. ${EXCLUDES}
+	SQUASHFSSIZE=$(ls -s ISOTMP/live/filesystem.squashfs | awk -F " " '{print $1}')
+	if [ ${SQUASHFSSIZE} -gt 3999999 ]; then
+		echo " The compressed filesystem is larger than the iso9660 specification allows for a single file. You must try to reduce the amount of data you are backing up and try again."
+		exit 1
+	fi
+}
+step_4() { # Make the ISO file
+	debug "Step 4: Make the ISO file"
+	CREATEISO=$(which mkisofs | cut -d" " -f1)
+	[ -z ${CREATEISO} ] && CREATEISO=$(which genisoimage | cut -d" " -f1)
+	#[ -z ${CREATEISO} ] && alerte
+	${CREATEISO} -allow-limited-size -quiet -r -V "${LIVECDLABEL}" -cache-inodes -J -l -b isolinux/isolinux.bin \
+		-c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table \
+		-o ${CUSTOMISO} ISOTMP
+	isohybrid ${CUSTOMISO}
+	sha256sum ${CUSTOMISO} > ${CUSTOMISO}.sha256
+}
+end() {
+	debug "End"
+	zenity --info --window-icon="${icon}" --title="${title}" --text "Congratulations!\n\nThe creation was a success."
+}
+
+
+# ==[C'est parti mon kiki !]============================================
+if [ $(id -ru) -ne 0 ]; then
+	gksu -u root $0
+	exit
+fi
+echo " ~ ${title} v${VERSION} ~"
+intro
+for i in $(seq 1 ${total_steps}); do
+	step_${i}
+	step=$(echo "${step} + 1" | bc)
+done
+end
+exit 0

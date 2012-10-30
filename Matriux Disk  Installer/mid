@@ -1,0 +1,423 @@
+#!/bin/sh
+#
+# ==================================================================== #
+#    MID (Matriux Disk Installer) by Mickaël 'Tiger-222' Schoentgen    #
+#                                 && Prajwal 'L30' Panchmahalkar       #
+# ==================================================================== #
+# Inspired by the PureOS installer.
+#
+# Last update: 2011.07.06
+#
+
+# ==[Variables]=========================================================
+VERSION="0.1-b2"
+icon="/pt/matriux/icons/48x48/icon.png"
+title="Matriux Disk Installer [${VERSION}]"
+current_user="matriux"
+space="6 Gio"
+new_user_shell="/bin/zsh"
+min_pwd_len=4
+total_steps=7
+start_time=$(date "+%s")
+
+# ==[Routines]==========================================================
+debug() {
+	current_time=$(date "+%s")
+	elapsed=$(echo "${current_time} - ${start_time}" | bc)
+	min=$(printf "%02d" $(echo "${elapsed} / 60" | bc))
+	sec=$(printf "%02d" $(echo "${elapsed} % 60" | bc))
+	echo "[${min}:${sec}]" $1
+}
+intro() {
+	debug "Introduction"
+	step=1
+	kernel=$(uname -r)
+	FS=$(cat /boot/config-${kernel} | grep 'CONFIG_[A-Z0-9]*_FS=y' \
+		| grep -v CONFIGFS | grep -v DEBUG | grep -v ECRYPT | grep -v FUSE \
+		| grep -v GFS2 | grep -v ISO | grep -v NTFS | grep -v PROC | grep -v UDF \
+		| cut -d_ -f2 | tr '[:upper:]' '[:lower:]' | sed 's/^/\t- /g'
+	)
+	if ! zenity --question --window-icon="${icon}" --width=450 --title="${title}" \
+	--text="Welcome to the Matriux Disk Installer.
+
+This installation program does not perform the process of partitioning your hard-disk.
+
+To perform the installation you need at least two partitions:
+	1. One SWAP partition.
+	2. One blank partition with at least ${space} free space.
+
+The blank partition has to be one of these file system:
+${FS}
+/!\\\ If you install the system on a not supported FS, you will not be able to boot on.
+	
+If you don't have prepared these partitions yet, please do it.
+For this task you could use fdisk or GParted, then mount the blank partition.
+
+I will guide you through ${total_steps} steps. Let's go?"
+	then
+		cancel intro
+	fi
+}
+step_1() {              # Partition choice
+	debug "Step 1: Partition choice"
+	partitions=$(cat /proc/mounts | grep -v loop | grep "/mnt" | cut -d" " -f-2  | egrep "^/dev")
+	if [ -z "${partitions}" ]; then
+		no_partition step_1
+		return
+	fi
+	partdest=$(zenity --list --window-icon="${icon}" --width=400 --height=300 --title="${title}" \
+		--text="Step ${step} - Choose the partition for the installation:" \
+		--print-column=2 --column="Partition" --column="Mount point"\
+		${partitions}
+	)
+	code=$?
+	case ${code} in
+		0) [ -z ${partdest} ] && please_choose step_1 ;;
+		1) cancel step_1 ;;
+	esac
+	device=$(cat /proc/mounts | grep "${partdest}" | egrep '^/dev' | cut -d" " -f1)
+	disk=$(echo ${device} | cut -b 6-)
+	chosen_fs=$(blkid ${device} | grep -o -G 'TYPE="[a-z0-9]*"' | cut -d'"' -f2)
+	within=$(echo "${FS}" | grep -c ${chosen_fs})
+	if [ ${within} -eq 0 ]; then
+		zenity --error --window-icon="${icon}" --width=450 --title="${title}" \
+			--text "Oups! The file system you choose is not supported by the current kernel, you will not be able to boot on the new system.
+	
+Try one of them and retry:
+${FS}"
+		step_1
+	fi
+}
+step_2() {              # Install Grub?
+	debug "Step 2: Install Grub?"
+	install_grub="no"
+	if zenity --question --window-icon="${icon}" --title="${title}" \
+		--text "\nDo you want to install Grub?"
+	then
+		install_grub="yes"
+		grubdest=$(fdisk -l | egrep -o "/dev/[a-z]+" | uniq \
+			| zenity --list --window-icon="${icon}" --width=400 --height=300 --title="${title}" \
+			--text="Step ${step} - Choose the disc for the Grub installation:" \
+			--column="Drives"
+		)
+		code=$?
+		case ${code} in
+			0) [ -z ${grubdest} ] && please_choose step_2 ;;
+			1) cancel step_2 ;;
+		esac
+	fi
+}
+step_3() {              # Personal account
+	debug "Step 3: Personal account"
+	compte=$(zenity --entry --window-icon="${icon}" --width=450 --title="${title}" \
+		--text="Step ${step} - Personal account creation, enter the display name:")
+	code=$?
+	case ${code} in
+		0) [ -z "${compte}" ] && please_choose step_3 ;;
+		1) cancel step_3 ;;
+	esac
+	connexion=$(zenity --entry --window-icon="${icon}" --width=450 --title="${title}" \
+		--text="Step ${step} - Personal account creation, enter the login name:")
+	code=$?
+	case ${code} in
+		0) [ -z "${connexion}" ] && please_choose step_3 ;;
+		1) cancel step_3 ;;
+	esac
+	set_password personal
+}
+step_4() {              # Root password
+	debug "Step 4: Root password"
+	set_password root
+}
+step_5() {              # Choose locale
+	debug "Step 5: Choose locale"
+	supported=$(cat /usr/share/i18n/SUPPORTED)
+	chosen_loc=$(zenity --list --window-icon="${icon}" --width=350 --height=500 \
+		--radiolist --title="${title}" \
+		--text="Step ${step} - Choose one locale:" \
+		--column="Select" --column="Locale" \
+		$(for line in $(echo "${supported}" | sed -e 's# #|#'); do
+			echo "FALSE ${line}" | cut -d"|" -f1
+		done)\
+	)
+	code=$?
+	case ${code} in
+		0) [ -z "${chosen_loc}" ] && please_choose step_5 ;;
+		1) cancel step_5 ;;
+	esac
+	locales=$(echo "${supported}" | sed "/${chosen_loc}/ !s/^/# /g")
+	
+	# Set some vars, example with chosen_loc="fr_FR.UTF-8 UTF-8"
+	# 	env => fr_FR.UTF-8
+	# 	l6n => fr_FR
+	# 	kbd => fr
+	env=$(echo "${chosen_loc}" | egrep '^[a-z]+' | cut -d" " -f1)
+	l6n=$(echo "${env}" | cut -d"." -f1)
+	kbd=$(echo ${env} | cut -d"_" -f1)
+	setxkbmap ${kbd} 2>/dev/null
+	code=$?
+	case ${code} in
+		0) layout=${kbd} ;;
+		*) layout="us" ;;
+	esac
+}
+step_6() {              # Confirmation
+	debug "Step 6: Confirmation"
+	if ! zenity --question --window-icon="${icon}" --width=500 --title="${title}" \
+		--text="Step ${step} -  Verifications:
+
+ 1. The system will be installed on ${device}.
+ 2. Install Grub: ${install_grub}.
+ 3. You are ${compte} and will login as ${connexion}.
+ 4. The locale to generate is ${env}.
+
+ \$ Who am I? I'm a champion!
+
+Let's go!"
+	then
+		cancel step_6
+	fi
+}
+step_7() {              # Installation
+	debug "Step 7: Installation"
+	# Little protection ... Against myself!
+	[ -z ${partdest} ] && alerte
+	[ ${partdest} = "/" ] && alerte
+	
+	(
+		echo
+		cd ${partdest}
+		
+		# System files
+		rm -rf *
+		cp --preserve --recursive /bin /etc /lib /opt /pt /sbin /usr .
+		rsync --recursive -E -A -X -o -g -D /var --exclude=log/* --exclude=tmp/* --exclude=cache/apt/archives/* .
+		for folder in $(find /var/log/* -type d | cut -d"/" -f2-); do
+			mkdir -p ${folder}
+		done
+		mkdir -p boot dev home media mnt proc selinux sys tmp
+		mkdir -p mnt/backup mnt/iso mnt/network mnt/usb mnt/windows
+		chmod 0777 tmp
+		cp --recursive --preserve /dev/null /dev/console dev
+		rsync --recursive -E -A -X -o -g -D /home/${current_user} \
+			--exclude=.*history \
+			--exclude=.recently-used* \
+			--exclude=.thumbnails/* \
+			--exclude=.tmp \
+			--exclude=Desktop/* \
+			--exclude=.xsession-errors* \
+			home
+		rsync --recursive -E -A -X -o -g -D /root --exclude=.*history .
+		cp /boot/config-${kernel} /boot/initrd.img-${kernel} /boot/System.map-${kernel} /boot/vmlinuz-${kernel} boot
+		chroot . ln -sf /boot/vmlinuz-${kernel} /vmlinuz
+		chroot . ln -sf /boot/initrd.img-${kernel} /initrd.img
+		
+		# Fix hostname
+		echo "Matriux" >etc/hostname
+		echo "127.0.0.1 localhost.localdomain localhost Matriux" >etc/hosts
+		
+		# Fix resolv.conf
+		echo "nameserver 212.27.40.241" >etc/resolv.conf
+		echo "nameserver 212.27.40.240" >>etc/resolv.conf
+		
+		# Mount configuration
+		echo "${device} / auto defaults 1 1" >etc/fstab
+		cat /etc/fstab | grep -v ${device} >>etc/fstab
+		rm etc/mtab
+		
+		# Manage account
+		# ${current_user} is the Live CD user
+		# ${connexion}    is the user to create login name
+		chroot . usermod \
+			--comment "${compte}" \
+			--home /home/${connexion} \
+			--move-home ${current_user} \
+			--shell ${new_user_shell}
+		chroot . usermod --login ${connexion} ${current_user}
+		chroot . groupmod --new-name ${connexion} ${current_user}
+		
+		# Fix menu entries name and icon
+		cd home/${connexion}/.local/share/applications/
+		ls *.desktop >list
+		while read entry; do
+			# Give nice name
+			#nice=$(echo "${entry}" | sed -e 's# #-#g' | tr '[:upper:]' '[:lower:]')
+			#[ ! -e ${nice} ] && mv "${entry}" ${nice}
+			#entry=${nice}
+			# Fix it my dear!
+			name=$(grep "Name\[en_IN]" "${entry}" | cut -d"=" -f2)
+			icon=$(grep "Icon\[en_IN]" "${entry}" | cut -d"=" -f2)
+			if [ -n "${name}" ] && [ -n "${icon}" ]; then
+				sed -i -e '/^Name/ D' -e '/^Icon/ D' "${entry}"
+				echo "Name=${name}" >>"${entry}"
+				echo "Icon=${icon}" >>"${entry}"
+			elif [ -n "${name}" ]; then
+				sed -i -e '/^Name/ D' "${entry}"
+				echo "Name=${name}" >>"${entry}"
+			elif [ -n "${icon}" ]; then
+				sed -i -e '/^Icon/ D' "${entry}"
+				echo "Icon=${icon}" >>"${entry}"
+			fi
+		done <list
+		rm list
+		
+		# Fix "Untrusted application launcher"
+		chmod +x *.desktop
+		
+		cd ${partdest}
+		
+		# Password changes
+		cat >mdp.sh <<EOM
+#!/bin/sh
+echo "root:${passw_root}" | chpasswd
+echo "${connexion}:${passw_util}" | chpasswd
+exit
+EOM
+		chmod +x mdp.sh
+		chroot . ./mdp.sh
+		rm mdp.sh
+		
+		# Generate the correct locale and keyboard layout
+		rm etc/locale.gen
+		cat >etc/locale.gen <<EOO
+# This file lists locales that you wish to have built. You can find a list
+# of valid supported locales at /usr/share/i18n/SUPPORTED, and you can add
+# user defined locales to /usr/local/share/i18n/SUPPORTED. If you change
+# this file, you need to rerun locale-gen.
+
+
+${locales}
+EOO
+		rm etc/default/locale
+		cat >etc/default/locale <<EON
+LANG=${env}
+LANGUAGE=${l6n}:${kbd}
+LC_ALL=${env}
+EON
+		sed -i "/XKBLAYOUT/ s/\"[a-z]*/\"${layout}/" etc/default/keyboard
+		chroot . locale-gen 2>/dev/null
+		chroot . update-locale 2>/dev/null
+	) | zenity --progress --window-icon="${icon}" --width=450 --title="${title}" \
+			--text="Final step - Installing the system ..." --pulsate --auto-close
+	case ${install_grub} in
+		"yes") launch_grub_install ;;
+	esac
+}
+cancel() {
+	if zenity --question --window-icon="${icon}" --title="${title}" \
+		--text "\nDo you want to cancel the installation?"
+	then
+		pkill zenity
+		pkill mid
+	fi
+	[ ! -z $1 ] && $1
+}
+please_choose() {
+	zenity --warning --window-icon="${icon}" --title="${title}" \
+		--text "\nPlease make your choice!\nI will wait while you are doing what you should ..."
+	$1
+}
+no_partition() {
+	zenity --warning --window-icon="${icon}" --title="${title}" \
+		--text "\nI did not find any free mount point.
+Please create/mount one partition then click on Ok
+to reload this step ..."
+	cancel $1
+}
+set_password() {        # Set passwords for root and personal accounts
+	passw_tmp="mot de passe"
+	passw_tmp2="password"
+	until [ "${passw_tmp}" = "${passw_tmp2}" ]; do
+		passw_tmp=$(zenity --entry --window-icon="${icon}" --width=450 --title="${title}" \
+			--text="Step ${step} - Choose the $1 account password:" --hide-text)
+		code=$?
+		case ${code} in
+			1)
+				cancel
+				if [ -z "${passw_tmp}" ]; then
+					set_password $1
+					return
+				fi
+			;;
+		esac
+		passw_tmp2=$(zenity --entry --window-icon="${icon}" --width=450 --title="${title}" \
+			--text="Step ${step} - Confirm $1 account password:" --hide-text)
+		code=$?
+		case ${code} in
+			1)
+				cancel
+				if [ -z "${passw_tmp2}" ]; then
+					set_password $1
+					return
+				fi
+			;;
+		esac
+		if [ "${passw_tmp}" != "${passw_tmp2}" ]; then
+			zenity --error --window-icon="${icon}" --title="${title}" \
+				--text "\nPasswords are different, please do it again."
+			set_password $1
+		else
+			if [ ${#passw_tmp} -lt ${min_pwd_len} ]; then
+				zenity --error --window-icon="${icon}" --title="${title}" \
+					--text "\nThe password must be at least ${min_pwd_len} characters long."
+			set_password $1
+			fi
+		fi
+	done
+	case $1 in
+		"personal") passw_util="${passw_tmp}" ;;
+		"root") passw_root="${passw_tmp}" ;;
+	esac
+}
+launch_grub_install() { # Installation - Grub
+	debug "Installation - Grub"
+	(
+		echo
+		sleep 2
+		mount -o bind /dev ${partdest}/dev
+		mount -t proc /proc ${partdest}/proc
+		mount -o bind /sys ${partdest}/sys
+		grub-install --no-floppy --root-directory=${partdest} ${grubdest}
+		chroot ${partdest} update-grub 2>/dev/null
+		umount ${partdest}/dev
+		umount ${partdest}/proc
+		umount ${partdest}/sys
+	) | zenity --progress --window-icon="${icon}" --width=450 --title="${title}" \
+			--text="Final step - Installing Grub ..." --pulsate --auto-close
+}
+alerte() {
+	zenity --warning --window-icon="${icon}" --title="${title}" \
+		--text "\nAre you mad?! I will not install the new system into \"/\"!"
+	pkill zenity
+	pkill mid
+}
+end() {
+	debug "End"
+	if zenity --question --window-icon="${icon}" --title="${title}" --text "Congratulations!
+
+The installation was a success.
+Do you want to restart and boot on your new system?"
+	then
+		umount ${partdest}
+		if [ $? -ne 0 ]; then
+			sleep 5
+			umount -lf ${partdest}
+		fi
+		shutdown -r now
+	fi
+}
+
+
+# ==[C'est parti mon kiki !]============================================
+if [ $(id -ru) -ne 0 ]; then
+	gksu -u root $0
+	exit
+fi
+echo " ~ Matriux Disk Installer v${VERSION} ~"
+intro
+for i in $(seq 1 ${total_steps}); do
+	step_${i}
+	step=$(echo "${step} + 1" | bc)
+done
+end
+exit
