@@ -1,23 +1,25 @@
 #!/bin/sh
 #
 # ==================================================================== #
-#    MID (Matriux Disk Installer) by Mickaël 'Tiger-222' Schoentgen    #
-#                                 && Prajwal 'L30' Panchmahalkar       #
+#              MID (Matriux Disk Installer) by                         #
+#              Mickaël 'Tiger-222' Schoentgen                          #
+#                             &&                                       #
+#              Prajwal 'L30' Panchmahalkar                             #
 # ==================================================================== #
 # Inspired by the PureOS installer.
 #
-# Last update: 2011.07.06
+# Last update: 2013.06.12
 #
 
 # ==[Variables]=========================================================
-VERSION="0.1-b2"
+VERSION="0.3-b3 for Matriux Leandros"
 icon="/pt/matriux/icons/48x48/icon.png"
 title="Matriux Disk Installer [${VERSION}]"
 current_user="matriux"
 space="6 Gio"
 new_user_shell="/bin/zsh"
 min_pwd_len=4
-total_steps=7
+total_steps=8
 start_time=$(date "+%s")
 
 # ==[Routines]==========================================================
@@ -58,7 +60,39 @@ I will guide you through ${total_steps} steps. Let's go?"
 		cancel intro
 	fi
 }
-step_1() {              # Partition choice
+step_1() {              # Choose Partition to install
+	debug "Step 1: Choose the partition! warning this will wipe the data on the selected partition"
+	destpart=$(ls /dev/sd*)
+	chosen_loc=$(zenity --list --window-icon="${icon}" --width=350 --height=500 \
+		--radiolist --title="${title}" \
+		--text="Step ${step} - Choose the partition:" \
+		--column="Select" --column="Partition" \
+		$(for line in $(echo "${destpart}" | sed -e 's# #|#'); do
+			echo "FALSE ${line}" | cut -d"|" -f1
+		done)\
+	)
+	code=$?
+	case ${code} in
+		0) [ -z "${chosen_loc}" ] && please_choose step_1 ;;
+		1) cancel step_1 ;;
+	esac
+	locales=$(echo "${destpart}" | sed "/${chosen_loc}/ !s/^/# /g")
+	
+	mkdir /mnt/os
+	mountpt="/mnt/os"
+	mntpartition=$chosen_loc
+	mount $mntpartition $mountpt
+	env=$(echo "${destpart}" | egrep '^[a-z]+' | cut -d" " -f1)
+	l6n=$(echo "${env}" | cut -d"." -f1)
+	kbd=$(echo ${env} | cut -d"_" -f1)
+	setxkbmap ${kbd} 2>/dev/null
+	code=$?
+	case ${code} in
+		0) layout=${kbd} ;;
+		*) layout="us" ;;
+	esac
+}
+step_2() {              # Partition choice
 	debug "Step 1: Partition choice"
 	partitions=$(cat /proc/mounts | grep -v loop | grep "/mnt" | cut -d" " -f-2  | egrep "^/dev")
 	if [ -z "${partitions}" ]; then
@@ -72,8 +106,8 @@ step_1() {              # Partition choice
 	)
 	code=$?
 	case ${code} in
-		0) [ -z ${partdest} ] && please_choose step_1 ;;
-		1) cancel step_1 ;;
+		0) [ -z ${partdest} ] && please_choose step_2 ;;
+		1) cancel step_2 ;;
 	esac
 	device=$(cat /proc/mounts | grep "${partdest}" | egrep '^/dev' | cut -d" " -f1)
 	disk=$(echo ${device} | cut -b 6-)
@@ -85,10 +119,10 @@ step_1() {              # Partition choice
 	
 Try one of them and retry:
 ${FS}"
-		step_1
+		step_2
 	fi
 }
-step_2() {              # Install Grub?
+step_3() {              # Install Grub?
 	debug "Step 2: Install Grub?"
 	install_grub="no"
 	if zenity --question --window-icon="${icon}" --title="${title}" \
@@ -102,12 +136,12 @@ step_2() {              # Install Grub?
 		)
 		code=$?
 		case ${code} in
-			0) [ -z ${grubdest} ] && please_choose step_2 ;;
-			1) cancel step_2 ;;
+			0) [ -z ${grubdest} ] && please_choose step_3 ;;
+			1) cancel step_3 ;;
 		esac
 	fi
 }
-step_3() {              # Personal account
+step_4() {              # Personal account
 	debug "Step 3: Personal account"
 	compte=$(zenity --entry --window-icon="${icon}" --width=450 --title="${title}" \
 		--text="Step ${step} - Personal account creation, enter the display name:")
@@ -120,16 +154,16 @@ step_3() {              # Personal account
 		--text="Step ${step} - Personal account creation, enter the login name:")
 	code=$?
 	case ${code} in
-		0) [ -z "${connexion}" ] && please_choose step_3 ;;
-		1) cancel step_3 ;;
+		0) [ -z "${connexion}" ] && please_choose step_4 ;;
+		1) cancel step_4 ;;
 	esac
 	set_password personal
 }
-step_4() {              # Root password
+step_5() {              # Root password
 	debug "Step 4: Root password"
 	set_password root
 }
-step_5() {              # Choose locale
+step_6() {              # Choose locale
 	debug "Step 5: Choose locale"
 	supported=$(cat /usr/share/i18n/SUPPORTED)
 	chosen_loc=$(zenity --list --window-icon="${icon}" --width=350 --height=500 \
@@ -142,8 +176,8 @@ step_5() {              # Choose locale
 	)
 	code=$?
 	case ${code} in
-		0) [ -z "${chosen_loc}" ] && please_choose step_5 ;;
-		1) cancel step_5 ;;
+		0) [ -z "${chosen_loc}" ] && please_choose step_6 ;;
+		1) cancel step_6 ;;
 	esac
 	locales=$(echo "${supported}" | sed "/${chosen_loc}/ !s/^/# /g")
 	
@@ -161,7 +195,7 @@ step_5() {              # Choose locale
 		*) layout="us" ;;
 	esac
 }
-step_6() {              # Confirmation
+step_7() {              # Confirmation
 	debug "Step 6: Confirmation"
 	if ! zenity --question --window-icon="${icon}" --width=500 --title="${title}" \
 		--text="Step ${step} -  Verifications:
@@ -175,10 +209,10 @@ step_6() {              # Confirmation
 
 Let's go!"
 	then
-		cancel step_6
+		cancel step_7
 	fi
 }
-step_7() {              # Installation
+step_8() {              # Installation
 	debug "Step 7: Installation"
 	# Little protection ... Against myself!
 	[ -z ${partdest} ] && alerte
